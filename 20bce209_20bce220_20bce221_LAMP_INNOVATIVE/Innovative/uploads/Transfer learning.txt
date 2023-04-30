@@ -1,0 +1,165 @@
+
+################## Code 1 Starts #################################
+#Code for CIFAR 10 Transfer Learning using Xception, no generator
+#Loading Libraries
+import tensorflow
+from tensorflow import keras
+import numpy as np
+import cv2
+from keras.applications.xception import Xception, preprocess_input
+from keras.layers import Dense, MaxPool2D, Conv2D, Dropout, Flatten, GlobalAveragePooling2D
+from keras.models import Sequential
+from keras.utils import np_utils
+from keras.datasets import cifar10
+
+#Loading Data
+(x_train, y_train), (x_test, y_test) = cifar10.load_data()
+
+#types and shape
+#print("After Load:")
+#print(type(x_train), type(x_test), type(y_train), type(y_test))
+#print(x_train.shape, x_test.shape, y_train.shape, y_test.shape)
+
+#One hot encode outputs
+y_train_one_hot=np_utils.to_categorical(y_train)
+y_test_one_hot=np_utils.to_categorical(y_test)
+
+del y_train
+del y_test
+
+#print("After One Hot Encoding:")
+#print(type(y_train_one_hot), type(y_test_one_hot), y_train_one_hot.shape, y_test_one_hot.shape)
+
+num_classes=y_test_one_hot.shape[1]
+print("Num Classes:",num_classes)
+
+#resize for Xception
+x_train = np.array([cv2.resize(x_train[i], dsize=(72, 72), interpolation=cv2.INTER_CUBIC) for i in range(0, len(x_train))]).astype('float16')
+
+print("After Reshape:")
+print(type(x_train), x_train.shape)
+
+
+#Load Pretrained Model
+model_pretrained_wo_top=Xception(include_top=False, weights='imagenet', input_tensor=None, input_shape=(72,72,3), pooling=None)
+#model_pretrained_wo_top._make_predict_function()
+#model_pretrained_wo_top.summary()
+
+#Preprocess Input for pretrained model
+x_train=preprocess_input(x_train)
+
+
+
+#print("after preprocess:")
+#print(type(x_train), x_train.shape)
+
+#Generate Features
+x_train=model_pretrained_wo_top.predict(x_train)
+del x_train
+
+x_test = np.array([cv2.resize(x_test[i], dsize=(72, 72), interpolation=cv2.INTER_CUBIC) for i in range(0, len(x_test))]).astype('float16')
+#print(type(x_test), x_test.shape)
+x_test=preprocess_input(x_test)
+
+x_test=model_pretrained_wo_top.predict(x_test)
+
+#delete
+del model_pretrained_wo_top
+
+#print("After Feature Prediction:")
+#print(type(x_train), x_train.shape, x_train.shape[1:])
+
+#Classifier on top
+model = Sequential()
+model.add(GlobalAveragePooling2D(input_shape=(7,7,2048)))
+model.add(Dropout(0.3))
+model.add(Dense(10, activation='softmax'))
+#model.summary()
+
+model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+#Train the classifier
+model.fit(x_train, y_train_one_hot, validation_data=(x_test, y_test_one_hot), batch_size=32, epochs=10, verbose=1)
+
+#Evaluate
+scores = model.evaluate(x=x_test, y=y_test_one_hot, verbose=0)
+print(model.metrics_names)
+print("Test Loss:",scores[0])
+print("Baseline Error:", round((100-scores[1]*100),2), "%")
+
+################## Code 1 Ends   ###############################  
+
+
+################## Code 2 Starts ################################  
+#Code for CIFAR 10 Transfer Learning using Xception and Generator
+#Loading Libraries
+import keras
+import numpy as np
+import cv2
+from keras.applications.xception import Xception, preprocess_input
+from keras.layers import Dense, MaxPool2D, Conv2D, Dropout, Flatten, GlobalAveragePooling2D
+from keras.models import Sequential
+from keras.utils import np_utils
+from keras.datasets import cifar10
+from keras.utils import Sequence
+
+nr, nc = 299, 299
+batch_size=200
+num_epochs=2
+
+#Load Pretrained Model
+model_pretrained_wo_top=Xception(include_top=False, weights='imagenet', input_tensor=None, input_shape=(nr,nc,3), pooling=None)
+model_pretrained_wo_top._make_predict_function()
+#model_pretrained_wo_top.summary()
+
+
+#data generator
+def myGenerator(x, y, nr, nc, batch_size, me):
+    print("\nIn Generator", me)
+    while 1:
+      print("\nIn While", me)
+      for i in range(x.shape[0] // batch_size):
+            print("\nIn for", i, me)
+            ip=x[i*batch_size:(i+1)*batch_size]
+            op=y[i*batch_size:(i+1)*batch_size]
+            temp = preprocess_input( np.array([cv2.resize(ip[i], dsize=(nr, nc), interpolation=cv2.INTER_CUBIC) for i in range(batch_size)]).astype('float32') )
+            temp=model_pretrained_wo_top.predict(temp)
+            yield temp, op
+           
+
+#Loading Data
+(x_train, y_train), (x_test, y_test) = cifar10.load_data()
+
+#types and shape
+#print(type(x_train), type(x_test), type(y_train), type(y_test))
+#print(x_train.shape, x_test.shape, y_train.shape, y_test.shape)
+
+#One hot encode outputs
+#print(y_train.shape, y_test.shape)
+y_train_one_hot=np_utils.to_categorical(y_train)
+y_test_one_hot=np_utils.to_categorical(y_test)
+#print(y_train_one_hot.shape, y_test_one_hot.shape)
+num_classes=y_test_one_hot.shape[1]
+#print(num_classes)
+
+
+#Generator Object
+my_training_batch_generator = myGenerator(x_train, y_train_one_hot, nr, nc, batch_size,'training generator')
+my_validation_batch_generator = myGenerator(x_test, y_test_one_hot, nr, nc, batch_size, 'validation generator')
+
+#Classifier on top
+model = Sequential()
+model.add(GlobalAveragePooling2D(input_shape=model_pretrained_wo_top.output_shape[1:]))
+model.add(Dropout(0.3))
+model.add(Dense(10, activation='softmax'))
+model.summary()
+
+model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+
+#Train the classifier
+model.fit_generator(generator=my_training_batch_generator, steps_per_epoch=x_train.shape[0] // batch_size,
+                                          epochs=num_epochs, verbose=1, validation_data=my_validation_batch_generator,
+                                          validation_steps=(x_test.shape[0] // batch_size))
+
+################### Code 2 Ends ############################# 
